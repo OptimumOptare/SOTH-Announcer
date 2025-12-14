@@ -14,16 +14,7 @@ const CHANNEL_ID = process.env.DISCORD_CHANNEL_ID;
 const SCHEDULE = process.env.CRON_SCHEDULE || '*/10 * * * *';
 
 // Load ABI
-const abiPath = path.join(__dirname, '../Smartcontract/SOTHCONTRACT_ABI');
-let contractABI;
-try {
-    const abiFile = fs.readFileSync(abiPath, 'utf8');
-    const abiJson = JSON.parse(abiFile);
-    contractABI = abiJson.abi;
-} catch (error) {
-    console.error('Error loading ABI:', error);
-    process.exit(1);
-}
+const contractABI = require('./abi');
 
 // Initialize Discord Client
 const client = new Client({
