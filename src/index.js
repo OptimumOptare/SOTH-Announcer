@@ -11,7 +11,6 @@ const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CHANNEL_ID = process.env.DISCORD_CHANNEL_ID;
-// Cron schedule: Default to every 10 minutes to check, or user defined
 const SCHEDULE = process.env.CRON_SCHEDULE || '*/10 * * * *';
 
 // Load ABI
@@ -59,8 +58,6 @@ async function checkAndExecute() {
                 // Keep data for announcement
                 const endedRoundNumber = round;
                 const finalStakedCount = stakedCount;
-                // Note: jackpot might be transferred out, so we rely on logs for winnings, but we can use the pre-tx snapshot for the "Prizepool" display if we assume it was the pot.
-                // However, the user says "13.000 $MON Prizepool".
 
                 const tx = await contract.endRound();
                 console.log(`endRound tx sent: ${tx.hash}`);
@@ -86,12 +83,6 @@ async function checkAndExecute() {
             await txStart.wait();
             console.log('New round started.');
 
-            // Only announce new round start if we didn't just end a round (e.g. cold start)
-            // But usually we want the full daily report. 
-            // If we only started a round without ending one, we verify what the user wants. 
-            // User: "There is a end round and Start new round function i need to call once a day."
-            // So arguably we should only see the full report. 
-            // If just starting, we'll announce just the start.
             await announceNewRoundOnly();
         }
     } catch (error) {
@@ -128,35 +119,19 @@ async function announceDailyUpdate(endedRoundNumber, stakedCount, receipt) {
                 jackpotPaid = ethers.formatEther(parsed.args.amount);
                 winner = parsed.args.winner;
             }
-            // Multi-burn logic in contract might burn multiple, but current contract seems to burn 1 in _handleMultiNFTRound
         } catch (e) {
             // ignore
         }
     }
 
     const nextRound = Number(endedRoundNumber) + 1;
-    // Format jackpot - user requested "13.000 $MON Prizepool" style
-    // If jackpotPaid is 13000.0, we format it.
-    // ethers.formatEther returns a string.
-    const formattedJackpot = parseFloat(jackpotPaid).toLocaleString('de-DE', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
-    // using de-DE for "13.000" (dot as thousands, comma as decimal) or just mimic user's "13.000" if they meant 13k.
-    // Actually "13.000" in US locale is 13.
-    // If user is from a locale where . is thousands separator (like DE/EU), then 13.000 is 13k.
-    // Given the ambiguity, and "MON" likely being a testnet token, 13k is plausible. 
-    // I will use a simple formatter. 
-    // The user wrote "13.000" which looks like 13 thousand.
-    // I will print the value as is from ethers but maybe formatted.
+
 
     // Construct the message
-    // "Day 7 of Schizo of the Hill (This is the ending round)"
-    const line1 = `Day ${endedRoundNumber} of Schizo of the Hill`;
-    // "13.000 $MON Prizepool"
-    const line2 = `${formattedJackpot} $MON Prizepool`;
-    // "48 Contestants were competing to become the King of the Hill."
+    const line1 = `# Day ${endedRoundNumber} of Schizo of the Hill`;
+    const line2 = `13000 $MON Prizepool`;
     const line3 = `${stakedCount} Contestants were competing to become the King of the Hill.`;
-    // "#173 died on the Hill." (If burned)
     const line4 = burnedTokenId ? `#${burnedTokenId} died on the Hill.` : `No one died on the Hill.`;
-    // "Round 8 has started. Good Luck Schizos"
     const line5 = `Round ${nextRound} has started. Good Luck Schizos`;
 
     const message = `${line1}\n${line2}\n${line3}\n\n${line4}\n\n${line5}`;
@@ -182,10 +157,10 @@ client.once('ready', () => {
     console.log(`Scheduling bot with schedule: ${SCHEDULE}`);
     cron.schedule(SCHEDULE, () => {
         checkAndExecute();
+    }, {
+        timezone: "UTC"
     });
 
-    // Also run immediately on startup if desired, or just wait for schedule
-    // checkAndExecute(); 
 });
 
 client.login(DISCORD_TOKEN);
