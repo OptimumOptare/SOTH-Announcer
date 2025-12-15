@@ -1,7 +1,7 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const { ethers } = require('ethers');
-const cron = require('node-cron');
+
 const fs = require('fs');
 const path = require('path');
 
@@ -11,7 +11,7 @@ const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CHANNEL_ID = process.env.DISCORD_CHANNEL_ID;
-const SCHEDULE = process.env.SCHEDULE;
+
 
 
 // Load ABI
@@ -145,13 +145,8 @@ async function announceNewRoundOnly() {
 client.once('ready', () => {
     console.log(`Logged in as ${client.user.tag}!`);
 
-    // Schedule the check
-    console.log(`Scheduling bot with schedule: ${SCHEDULE}`);
-    cron.schedule(SCHEDULE, () => {
-        checkAndExecute();
-    }, {
-        timezone: "UTC"
-    });
+    // Execute immediately as Railway handles the schedule
+    checkAndExecute();
 
 });
 
