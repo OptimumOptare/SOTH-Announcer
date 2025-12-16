@@ -142,12 +142,21 @@ async function announceNewRoundOnly() {
     await channel.send(`Round ${round} has started. Good Luck Schizos`);
 }
 
-client.once('ready', () => {
+client.once('ready', async () => {
     console.log(`Logged in as ${client.user.tag}!`);
 
-    // Execute immediately as Railway handles the schedule
-    checkAndExecute();
-
+    try {
+        // Execute immediately as Railway handles the schedule
+        await checkAndExecute();
+        console.log('Execution completed.');
+    } catch (error) {
+        console.error('Execution failed:', error);
+        process.exitCode = 1;
+    } finally {
+        console.log('Destroying client and exiting...');
+        client.destroy();
+        process.exit();
+    }
 });
 
 client.login(DISCORD_TOKEN);
