@@ -12,8 +12,6 @@ const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CHANNEL_ID = process.env.DISCORD_CHANNEL_ID;
 
-
-
 // Load ABI
 const contractABI = require('./abi');
 
@@ -49,12 +47,15 @@ async function checkAndExecute() {
 
                 // Keep data for announcement
                 const endedRoundNumber = round;
-                const finalStakedCount = stakedCount;
+                const startingStakedCount = stakedCount;
 
                 const tx = await contract.endRound();
                 console.log(`endRound tx sent: ${tx.hash}`);
                 const receipt = await tx.wait();
                 console.log('endRound confirmed.');
+
+                // Parse logs for specific details from the receipt
+                const eventData = parseEventsFromReceipt(receipt);
 
                 // Start new round immediately after
                 console.log('Starting new round...');
@@ -64,42 +65,60 @@ async function checkAndExecute() {
                 console.log('New round started.');
 
                 // Announce everything in one go
-                await announceDailyUpdate(endedRoundNumber, finalStakedCount, receipt);
+                await announceDailyUpdate(endedRoundNumber, startingStakedCount, eventData);
             } else {
                 console.log('Round is still active. Waiting...');
             }
         } else {
-            console.log('Round is not active. Starting new round...');
-            const txStart = await contract.startRound();
-            console.log(`startRound tx sent: ${txStart.hash}`);
-            await txStart.wait();
-            console.log('New round started.');
+            console.log('Round is not active. Attempting to recover and start new round...');
 
-            await announceNewRoundOnly();
+            // If the round is not active, it means endRound() was likely called (by us or someone else),
+            // but we might have missed the announcement.
+            // "round" variable here should be the round that just ended.
+            const endedRoundNumber = round;
+
+            // Determine "startingStakedCount". 
+            // Since the round is over, the current "stakedCount" (survivors) reflects the state AFTER the death.
+            // We'll fetch recent events first to see if someone died.
+
+            console.log('Fetching recent events to reconstruct round history...');
+            const eventData = await fetchRecentEventsFromChain();
+
+            // If someone died, the count BEFORE endRound was survivors + 1.
+            // If no one died, it was survivors + 0.
+            const survivorsCount = Number(stakedCount);
+            // We need to be careful with BigInt -> Number, but for NFT counts it's safe.
+            const startingStakedCount = eventData.burnedTokenId ? (survivorsCount + 1) : survivorsCount;
+
+            console.log(`Recovered State - Round: ${endedRoundNumber}, Survivors: ${survivorsCount}, Died: ${eventData.burnedTokenId ? '#' + eventData.burnedTokenId : 'None'}`);
+
+            console.log('Starting new round...');
+            try {
+                const txStart = await contract.startRound();
+                console.log(`startRound tx sent: ${txStart.hash}`);
+                await txStart.wait();
+                console.log('New round started.');
+            } catch (err) {
+                // If startRound fails because it's already active (race condition), just proceed to announce
+                console.warn('startRound might have failed or race condition:', err.message);
+
+                // Optional: Check if the error implies the round is ALREADY started.
+                // Depending on the contract, calling startRound on active round might revert.
+            }
+
+            // Announce using the reconstructed data
+            await announceDailyUpdate(endedRoundNumber, startingStakedCount, eventData);
         }
     } catch (error) {
         console.error('Error in checkAndExecute:', error);
     }
 }
 
-async function announceDailyUpdate(endedRoundNumber, stakedCount, receipt) {
-    if (!client.isReady()) {
-        console.log('Discord client not ready, skipping announcement.');
-        return;
-    }
-
-    const channel = await client.channels.fetch(CHANNEL_ID);
-    if (!channel) {
-        console.error('Discord channel not found.');
-        return;
-    }
-
-    // Parse logs for specific details
+function parseEventsFromReceipt(receipt) {
     let burnedTokenId = null;
     let jackpotPaid = '0';
     let winner = null;
 
-    // We scan for specific events
     for (const log of receipt.logs) {
         try {
             const parsed = contract.interface.parseLog({ topics: log.topics.slice(), data: log.data });
@@ -115,31 +134,66 @@ async function announceDailyUpdate(endedRoundNumber, stakedCount, receipt) {
             // ignore
         }
     }
+    return { burnedTokenId, jackpotPaid, winner };
+}
 
+async function fetchRecentEventsFromChain() {
+    // Look back ~20000 blocks (Monad is fast, 200ms block time)
+    const currentBlock = await provider.getBlockNumber();
+    const fromBlock = currentBlock - 20000;
+
+    let burnedTokenId = null;
+    let jackpotPaid = '0';
+    let winner = null;
+
+    try {
+        const burnedEvents = await contract.queryFilter('NFTBurned', fromBlock, 'latest');
+        if (burnedEvents.length > 0) {
+            // Get the most recent one
+            const lastBurn = burnedEvents[burnedEvents.length - 1];
+            burnedTokenId = lastBurn.args.tokenId;
+        }
+
+        const jackpotEvents = await contract.queryFilter('JackpotWon', fromBlock, 'latest');
+        if (jackpotEvents.length > 0) {
+            const lastJackpot = jackpotEvents[jackpotEvents.length - 1];
+            jackpotPaid = ethers.formatEther(lastJackpot.args.amount);
+            winner = lastJackpot.args.winner;
+        }
+    } catch (e) {
+        console.error('Error fetching logs:', e);
+    }
+
+    return { burnedTokenId, jackpotPaid, winner };
+}
+
+async function announceDailyUpdate(endedRoundNumber, stakedCount, eventData) {
+    if (!client.isReady()) {
+        console.log('Discord client not ready, skipping announcement.');
+        return;
+    }
+
+    const channel = await client.channels.fetch(CHANNEL_ID);
+    if (!channel) {
+        console.error('Discord channel not found.');
+        return;
+    }
+
+    const { burnedTokenId, jackpotPaid, winner } = eventData;
     const nextRound = Number(endedRoundNumber) + 1;
-
 
     // Construct the message
     const line1 = `# Day ${endedRoundNumber} of Schizo of the Hill`;
-    const line2 = `13000 $MON Prizepool`;
+    const line2 = `13000 $MON Prizepool`; // Ideally this should be dynamic too, but keeping hardcoded as in original
     const line3 = `${stakedCount} Contestants were competing to become the King of the Hill.`;
     const line4 = burnedTokenId ? `#${burnedTokenId} died on the Hill.` : `No one died on the Hill.`;
     const line5 = `Round ${nextRound} has started. Good Luck Schizos`;
 
     const message = `${line1}\n${line2}\n${line3}\n\n${line4}\n\n${line5}`;
 
-    // Send as plain message to match the text format requested perfectly
+    // Send as plain message
     await channel.send(message);
-}
-
-async function announceNewRoundOnly() {
-    if (!client.isReady()) return;
-    const channel = await client.channels.fetch(CHANNEL_ID);
-    if (!channel) return;
-
-    // Get new round info
-    const [isActive, round] = await contract.getRoundInfo();
-    await channel.send(`Round ${round} has started. Good Luck Schizos`);
+    console.log('Announcement sent!');
 }
 
 client.once('ready', async () => {
