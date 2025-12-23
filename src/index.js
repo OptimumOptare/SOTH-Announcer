@@ -49,7 +49,7 @@ async function checkAndExecute() {
                 const endedRoundNumber = round;
                 const startingStakedCount = stakedCount;
 
-                const tx = await contract.endRound();
+                const tx = await contract.endRound({ gasLimit: 6000000 });
                 console.log(`endRound tx sent: ${tx.hash}`);
                 const receipt = await tx.wait();
                 console.log('endRound confirmed.');
